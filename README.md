@@ -153,6 +153,59 @@ FROM wf_tor_exits                               // one row per IP, in column `va
 | STATS exits = COUNT(*)
 ```
 
+## Writing your own workflow
+
+Any workflow works. It needs no special structure, only a `manual` trigger so it can be run on demand.
+
+* **It runs in full on every query.** Every step runs, including ones with side effects (a Slack message,
+  a case, an index write, an AI connector call). ES|QL only reads the output.
+* **The output is whatever one step returns.** By default that's the last step that produced output; pick
+  another with `step`. A JSON object or list works best. A single result, such as an AI step's answer, is one
+  row: a scalar goes in column `value`, an object's fields become columns.
+* **Make rows.** Return a list (one row each), a search response, an ES|QL response, or an object holding
+  one list of objects. Point `path` at anything else. Text from `http` arrives base64-encoded: decode it
+  (see `tor-exit-nodes`).
+* **Binary data, like images:** return a URL, or the base64 as a string. ES|QL holds it as a `keyword`
+  and can't display it.
+* **Inputs** are declared in the workflow and set per dataset:
+
+```yaml
+name: fetch-lines
+enabled: true
+triggers:
+  - type: manual
+inputs:
+  - name: url
+    type: string
+    required: true
+steps:
+  - name: fetch
+    type: http
+    with:
+      url: "${{ inputs.url }}"
+      method: GET
+  - name: parse
+    type: data.set
+    with:
+      lines: "${{ steps.fetch.output.data | base64_decode | strip | split: '\n' }}"
+```
+
+```
+PUT _query/dataset/wf_tor_exits
+{"data_source":"workflows","resource":"workflow://fetch-lines",
+ "settings":{"path":"lines","inputs":{"url":"https://check.torproject.org/torbulkexitlist"}}}
+```
+
+### Inputs at query time
+
+A syntax like `FROM fetch-lines url=https://…` isn't possible in Elasticsearch 9.5.4. `FROM` only takes
+dataset names, `SET` only takes Elasticsearch's own settings, and plugins can't extend the grammar. So
+for now it's one dataset per set of inputs.
+
+One caveat: columns come from the workflow's *latest* completed run, whatever its inputs were. Datasets
+on the same workflow with differently shaped output can see each other's columns. Give those their own
+workflows.
+
 ## Things to know
 
 * **Every query runs the workflow**, including each Discover refresh. Use workflows that only read.
