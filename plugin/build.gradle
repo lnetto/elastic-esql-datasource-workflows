@@ -1,0 +1,62 @@
+/*
+ * Kibana Workflows connector for ES|QL Data Federation — out-of-tree build.
+ *
+ * ES|QL's datasource SPI isn't published to Maven, so we compile against the jars shipped in
+ * the matching Elasticsearch image (scripts/extract-es-jars.sh → es-libs/). Nothing from
+ * es-libs is bundled: x-pack-esql is provided at runtime through extended.plugins.
+ */
+plugins {
+    id 'java'
+}
+
+group = 'org.elasticsearch.xpack.esql.datasource.workflow'
+version = "${pluginVersion}"
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(21) }
+}
+
+repositories {
+    mavenCentral()
+}
+
+def esLibs = fileTree(dir: 'es-libs', include: [
+    'lib/*.jar',
+    'modules/x-pack-core/*.jar',
+    'modules/x-pack-esql/*.jar',
+    'modules/x-pack-esql-core/*.jar',
+])
+
+dependencies {
+    compileOnly esLibs
+    testImplementation esLibs
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 21
+    options.compilerArgs << '-Xlint:all,-processing,-serial,-try,-classfile' << '-Werror'
+}
+
+test {
+    useJUnitPlatform()
+    outputs.upToDateWhen { false }
+    testLogging { events 'failed'; exceptionFormat 'full'; showStandardStreams = true }
+}
+
+def descriptor = tasks.register('pluginDescriptor', Copy) {
+    from 'src/main/plugin-metadata'
+    into layout.buildDirectory.dir('plugin-metadata')
+    inputs.property('pluginVersion', project.version)
+    inputs.property('esVersion', esVersion)
+    expand(pluginVersion: project.version, esVersion: esVersion)
+}
+
+tasks.register('bundlePlugin', Zip) {
+    dependsOn jar, descriptor
+    archiveFileName = "esql-datasource-workflow-${project.version}-es${esVersion}.zip"
+    destinationDirectory = layout.buildDirectory.dir('distributions')
+    from jar
+    from descriptor
+}
